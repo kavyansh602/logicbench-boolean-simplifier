@@ -6,6 +6,8 @@
 // State: 16 cells — 0 = zero, 1 = one, 2 = don't-care (X)
 const cells = new Array(16).fill(0);
 let hoveredPiMask = null;
+let lastRes = null;
+let typing = false;   // true while the user edits the expression box
 
 // Colour palette for PI loops (index → CSS class suffix)
 const LOOP_COLOR_COUNT = 5;
@@ -36,6 +38,96 @@ function loadPreset(name) {
         // 'clear' leaves all zeros
     }
     updateAll();
+}
+
+// ─── Expression Parser ───────────────────────────────────────────────────────
+// Accepts: A'B + C(D ^ A) · !A & (B | C) · A AND NOT B · Σm(1,3,7) + d(5) · F(A,B,C,D) = ...
+// Precedence: NOT (' ! ~) > AND (* & · or juxtaposition) > XOR (^ ⊕) > OR (+ | ∨)
+function compileExpr(src) {
+    const toks = [], re = /\s*([()'!~¬+|∨*&·∧^⊕]|[A-Za-z]+|[01])/y;
+    for (let pos = 0; pos < src.length;) {
+        re.lastIndex = pos;
+        const m = re.exec(src);
+        if (!m) {
+            if (/^\s*$/.test(src.slice(pos))) break;
+            throw new Error(`Unexpected "${src.slice(pos).trim()[0]}"`);
+        }
+        pos = re.lastIndex;
+        const t = m[1];
+        if (/^[A-Za-z]+$/.test(t)) {
+            const kw = { AND: '&', OR: '+', NOT: '!', XOR: '^' }[t.toUpperCase()];
+            if (kw) toks.push(kw);
+            else for (const ch of t.toUpperCase()) {
+                if (!'ABCD'.includes(ch)) throw new Error(`Variable "${ch}" not supported (use A–D)`);
+                toks.push(ch);
+            }
+        } else toks.push(t);
+    }
+    let i = 0;
+    const peek = () => toks[i];
+    const starts = t => t !== undefined && /^[A-D01(!~¬]$/.test(t);
+    const inSet = (t, set) => t !== undefined && set.includes(t);
+
+    function pOr() {
+        let l = pXor();
+        while (inSet(peek(), '+|∨')) { i++; const a = l, r = pXor(); l = v => a(v) | r(v); }
+        return l;
+    }
+    function pXor() {
+        let l = pAnd();
+        while (inSet(peek(), '^⊕')) { i++; const a = l, r = pAnd(); l = v => a(v) ^ r(v); }
+        return l;
+    }
+    function pAnd() {
+        let l = pNot();
+        for (;;) {
+            if (inSet(peek(), '*&·∧')) i++;
+            else if (!starts(peek())) break;
+            const a = l, r = pNot(); l = v => a(v) & r(v);
+        }
+        return l;
+    }
+    function pNot() {
+        if (inSet(peek(), '!~¬')) { i++; const x = pNot(); return v => x(v) ^ 1; }
+        let a = pAtom();
+        while (peek() === "'") { i++; const x = a; a = v => x(v) ^ 1; }
+        return a;
+    }
+    function pAtom() {
+        const t = peek();
+        i++;
+        if (t === '(') {
+            const e = pOr();
+            if (peek() !== ')') throw new Error('Missing closing ")"');
+            i++;
+            return e;
+        }
+        if (t === '0' || t === '1') return () => +t;
+        if (t && 'ABCD'.includes(t) && /^[A-D]$/.test(t)) { const sh = 3 - 'ABCD'.indexOf(t); return v => (v >> sh) & 1; }
+        throw new Error(t === undefined ? 'Expression ends unexpectedly' : `Unexpected "${t}"`);
+    }
+    if (!toks.length) throw new Error('Enter an expression');
+    const f = pOr();
+    if (i < toks.length) throw new Error(`Unexpected "${toks[i]}"`);
+    return f;
+}
+
+function parseInput(src) {
+    const body = src.trim().replace(/^F\s*(\([^)]*\))?\s*=\s*/i, '');
+    const mm = body.match(/^[Σ∑]?\s*m\s*\(([^)]*)\)\s*(?:\+\s*[Σ∑]?\s*d\s*\(([^)]*)\))?$/i);
+    if (mm) {
+        const nums = t => (t || '').split(',').map(x => x.trim()).filter(Boolean).map(x => {
+            const v = Number(x);
+            if (!Number.isInteger(v) || v < 0 || v > 15) throw new Error(`"${x}" is not a minterm in 0–15`);
+            return v;
+        });
+        const c = new Array(16).fill(0);
+        nums(mm[2]).forEach(k => c[k] = 2);
+        nums(mm[1]).forEach(k => c[k] = 1);
+        return c;
+    }
+    const f = compileExpr(body);
+    return Array.from({ length: 16 }, (_, k) => f(k));
 }
 
 // ─── Quine-McCluskey Solver ───────────────────────────────────────────────────
@@ -122,21 +214,24 @@ function solveQM() {
     const selectedMasks = new Set(essentialMasks);
     essentialMasks.forEach(mask => primeImplicants[mask].forEach(m => uncovered.delete(m)));
 
-    // Greedy cover of remaining minterms
-    while (uncovered.size > 0) {
-        let bestMask = null, bestCount = -1, bestLiterals = 99;
-        for (const [mask, cov] of Object.entries(primeImplicants)) {
-            if (selectedMasks.has(mask)) continue;
-            const count = cov.filter(m => uncovered.has(m)).length;
-            const lits  = 4 - mask.split('').filter(c => c === '-').length;
-            if (count > bestCount || (count === bestCount && lits < bestLiterals)) {
-                bestCount = count; bestMask = mask; bestLiterals = lits;
-            }
+    // Exact minimum cover of the remaining minterms (branch & bound):
+    // fewest product terms first, then fewest literals.
+    const litCount = mask => 4 - mask.split('').filter(c => c === '-').length;
+    const pool = Object.keys(primeImplicants).filter(k => !selectedMasks.has(k));
+    let best = null;
+    (function search(unc, chosen, lits) {
+        if (!unc.length) {
+            if (!best || chosen.length < best.n || (chosen.length === best.n && lits < best.l))
+                best = { n: chosen.length, l: lits, set: chosen };
+            return;
         }
-        if (!bestMask || bestCount <= 0) break;
-        selectedMasks.add(bestMask);
-        primeImplicants[bestMask].forEach(m => uncovered.delete(m));
-    }
+        if (best && (chosen.length + 1 > best.n || (chosen.length + 1 === best.n && lits >= best.l))) return;
+        const m = unc[0];
+        for (const k of pool.filter(k => primeImplicants[k].includes(m))) {
+            search(unc.filter(x => !primeImplicants[k].includes(x)), [...chosen, k], lits + litCount(k));
+        }
+    })([...uncovered].sort((a, b) => a - b), [], 0);
+    if (best) best.set.forEach(k => selectedMasks.add(k));
 
     const piList = Object.entries(primeImplicants).map(([mask, cov]) => ({
         mask,
@@ -219,11 +314,28 @@ function updateAll() {
 
     document.getElementById('minLiterals').textContent   = minLits;
     document.getElementById('canonLiterals').textContent = canonLits;
-    document.getElementById('gateCount').textContent     =
-        res.selected.length > 1 ? res.selected.length + 1 : res.selected.length;
+    const andGates = res.selected.filter(p => p.mask.replace(/-/g, '').length > 1).length;
+    document.getElementById('gateCount').textContent     = andGates + (res.selected.length > 1 ? 1 : 0);
     document.getElementById('reductionPct').textContent  = `${pct}%`;
 
+    // ── Verify: the cover must be 1 on every minterm, 0 on every zero (X is free)
+    const covered = new Set(res.selected.flatMap(p => p.cov));
+    const ok = cells.every((v, k) => v === 2 || (v === 1) === covered.has(k));
+    const vb = document.getElementById('verifyBadge');
+    vb.textContent = ok ? '✓ Verified equivalent' : '✗ Mismatch';
+    vb.className = `chip mono ${ok ? 'green' : 'accent'}`;
+
+    // ── Keep the expression box in sync with K-map / truth-table edits
+    if (!typing) {
+        const inp = document.getElementById('exprInput');
+        inp.value = minterms.length || dontCares.length
+            ? `Σm(${minterms.join(',')})${dontCares.length ? ` + d(${dontCares.join(',')})` : ''}` : '0';
+        inp.classList.remove('invalid');
+        document.getElementById('exprStatus').textContent = '';
+    }
+
     // ── Karnaugh Map
+    lastRes = res;
     renderKMap(res);
 
     // ── PI pills
@@ -233,8 +345,8 @@ function updateAll() {
         const pill = document.createElement('span');
         pill.className = `pi-pill loop-${i % LOOP_COLOR_COUNT}`;
         pill.textContent = `${pi.expr} (${pi.mask})`;
-        pill.onmouseenter = () => { hoveredPiMask = pi.mask; updateAll(); };
-        pill.onmouseleave = () => { hoveredPiMask = null;    updateAll(); };
+        pill.onmouseenter = () => { hoveredPiMask = pi.mask; renderKMap(lastRes); };
+        pill.onmouseleave = () => { hoveredPiMask = null; renderKMap(lastRes); };
         piPills.appendChild(pill);
     });
 
@@ -260,8 +372,8 @@ function updateAll() {
             <td>${pi.cov.join(', ')}</td>
             <td>${roleBadge}</td>
         `;
-        tr.onmouseenter = () => { hoveredPiMask = pi.mask; updateAll(); };
-        tr.onmouseleave = () => { hoveredPiMask = null;    updateAll(); };
+        tr.onmouseenter = () => { hoveredPiMask = pi.mask; renderKMap(lastRes); };
+        tr.onmouseleave = () => { hoveredPiMask = null; renderKMap(lastRes); };
         tbody.appendChild(tr);
     });
 
@@ -296,7 +408,10 @@ endmodule`;
         const fClass = st === 1 ? 'f-one' : st === 2 ? 'f-dc' : 'f-zero';
         const fText  = st === 2 ? 'X' : st;
         const tr = document.createElement('tr');
+        tr.tabIndex = 0;
+        tr.setAttribute('role', 'button');
         tr.onclick = () => { cells[i] = (cells[i] + 1) % 3; updateAll(); };
+        tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.onclick(); } };
         tr.innerHTML = `
             <td>${i}</td>
             <td>${bin[0]}</td>
@@ -398,6 +513,22 @@ document.getElementById('copyVerilogBtn').onclick = () => {
         setTimeout(() => { btn.textContent = 'Copy HDL ↗'; }, 1800);
     });
 };
+
+document.getElementById('exprInput').addEventListener('input', e => {
+    const inp = e.target, status = document.getElementById('exprStatus');
+    try {
+        const next = parseInput(inp.value);
+        next.forEach((v, k) => cells[k] = v);
+        inp.classList.remove('invalid');
+        status.className = 'expr-status';
+        status.textContent = '';
+        typing = true; updateAll(); typing = false;
+    } catch (err) {
+        inp.classList.add('invalid');
+        status.className = 'expr-status error';
+        status.textContent = err.message;
+    }
+});
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 loadPreset('default');

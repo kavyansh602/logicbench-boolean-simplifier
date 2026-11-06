@@ -42,6 +42,14 @@
   </header>
 
 
+  <!-- Expression input -->
+  <section class="expr-bar">
+    <label for="exprInput" class="label-sm">Expression</label>
+    <input id="exprInput" class="expr-input mono" type="text" autocomplete="off" spellcheck="false"
+      placeholder="A'B + C(D ^ A)    or    Σm(1,3,7) + d(5)" aria-describedby="exprStatus" />
+    <span id="exprStatus" class="expr-status mono" role="status" aria-live="polite"></span>
+  </section>
+
   <!-- ═══════════════════════════════════════
        Result Ribbon — Minimal SOP & KPIs
   ═══════════════════════════════════════ -->
@@ -52,6 +60,7 @@
       <div class="ribbon-label">
         Minimal SOP Expression
         <span id="epiCountBadge" class="chip accent mono">3 Terms</span>
+        <span id="verifyBadge" class="chip green mono"></span>
       </div>
       <div id="sopOutput" class="sop-output mono">
         F(A,B,C,D) = B'C' + A'B + CD'

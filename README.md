@@ -11,6 +11,20 @@ An exact Boolean Expression Simplification minor project combining a Python **Qu
 - `frontend/index.html`, `styles.css`, `app.js`: Interactive daylight engineering workbench featuring a clickable Gray-code Karnaugh Map, Prime Implicant coverage matrix, SVG gate-level schematic renderer, and Verilog HDL generator.
 - `docs/project_report.md`: Formal algorithmic trace and hardware reduction analysis.
 
+## Expression Input
+
+Type into the **Expression** bar (variables A–D) and the K-map, PI table, schematic, Verilog and truth table update live:
+
+| Syntax | Examples |
+| --- | --- |
+| NOT | `A'`  `!A`  `~A`  `NOT A` |
+| AND | `AB`  `A*B`  `A&B`  `A AND B` |
+| XOR | `A^B`  `A⊕B`  `A XOR B` |
+| OR  | `A+B`  `A\|B`  `A OR B` |
+| Minterm form | `Σm(1,3,7) + d(5)`  `F(A,B,C,D) = m(0,15)` |
+
+Precedence: NOT > AND > XOR > OR. Editing the K-map or truth table writes the matching `Σm(...)` back into the bar.
+
 ## How to Run
 
 ### 1. Launch the Interactive Web Dashboard
