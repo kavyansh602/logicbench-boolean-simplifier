@@ -250,13 +250,26 @@ function solveQM() {
 }
 
 // ─── Gate Schematic Renderer ──────────────────────────────────────────────────
-const LOOP_HEX = ['#3B6DE8', '#1B9E63', '#C5860E', '#D94040', '#7C47DC'];
+// Loop colours updated for dark theme
+const LOOP_HEX = ['#7C6FFF', '#00DFA2', '#FFB547', '#FF5A6E', '#00C9FF'];
+
+// Theme-aware colour tokens (read from CSS custom properties)
+function schematicColors() {
+    const style = getComputedStyle(document.documentElement);
+    return {
+        textPrimary:   style.getPropertyValue('--text-primary').trim()   || '#E8ECF7',
+        surfaceSolid:  style.getPropertyValue('--surface-solid').trim()  || '#111625',
+        textMuted:     style.getPropertyValue('--text-muted').trim()     || '#5A6180',
+    };
+}
 
 function renderSchematic(selectedPIs) {
     const svg = document.getElementById('schematicSvg');
+    const { textPrimary, surfaceSolid, textMuted } = schematicColors();
+
     if (selectedPIs.length === 0) {
         svg.innerHTML = `<text x="160" y="90" text-anchor="middle"
-            font-family="JetBrains Mono" font-size="12" fill="#9C9589">Output Constant 0</text>`;
+            font-family="JetBrains Mono" font-size="12" fill="${textMuted}">Output Constant 0</text>`;
         return;
     }
 
@@ -268,20 +281,20 @@ function renderSchematic(selectedPIs) {
         const y     = Math.round(15 + spacing * (idx + 1));
         const color = LOOP_HEX[idx % LOOP_HEX.length];
         html += `<text x="12" y="${y + 4}" font-family="JetBrains Mono" font-size="11"
-                    font-weight="600" fill="#1A1714">${pi.expr}</text>`;
+                    font-weight="600" fill="${textPrimary}">${pi.expr}</text>`;
         html += `<line x1="62" y1="${y}" x2="110" y2="${y}"
                     stroke="${color}" stroke-width="1.8"/>`;
         html += `<path d="M110,${y - 12} L128,${y - 12} A12,12 0 0,1 128,${y + 12} L110,${y + 12} Z"
-                    fill="#FFFFFF" stroke="#1A1714" stroke-width="1.5"/>`;
+                    fill="${surfaceSolid}" stroke="${textPrimary}" stroke-width="1.5"/>`;
         html += `<path d="M140,${y} L180,${y} L195,85"
                     fill="none" stroke="${color}" stroke-width="1.5"/>`;
     });
 
     html += `<path d="M190,62 Q202,85 190,108 Q222,106 238,85 Q222,64 190,62 Z"
-                fill="#FFFFFF" stroke="#1A1714" stroke-width="1.8"/>`;
-    html += `<line x1="238" y1="85" x2="275" y2="85" stroke="#1A1714" stroke-width="2"/>`;
+                fill="${surfaceSolid}" stroke="${textPrimary}" stroke-width="1.8"/>`;
+    html += `<line x1="238" y1="85" x2="275" y2="85" stroke="${textPrimary}" stroke-width="2"/>`;
     html += `<text x="282" y="89" font-family="JetBrains Mono" font-size="12"
-                font-weight="700" fill="#1A1714">F</text>`;
+                font-weight="700" fill="${textPrimary}">F</text>`;
 
     svg.innerHTML = html;
 }
